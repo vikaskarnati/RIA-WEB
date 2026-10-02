@@ -1,6 +1,7 @@
 livekit-agents
 livekit-plugins-openai
 livekit-plugins-silero
+livekit-plugins-smallestai
 python-dotenv
 livekit-api
 flask[async]

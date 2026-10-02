@@ -5,7 +5,6 @@ import os
 import math
 
 from dotenv import load_dotenv
-from openai.types.beta.realtime.session import TurnDetection
 
 from livekit.agents import (
     Agent,
@@ -15,7 +14,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
-from livekit.plugins import openai
+from livekit.plugins import openai, silero, smallestai
 
 from api import AssistantFnc
 from prompts import INSTRUCTIONS, WELCOME_MESSAGE
@@ -28,50 +27,35 @@ logger.setLevel(logging.INFO)
 
 async def entrypoint(ctx: JobContext):
     logger.info("Connecting to room: %s", ctx.room.name)
-
     await ctx.connect()
 
     participant = await ctx.wait_for_participant()
-
-    logger.info(
-        "Participant joined: %s",
-        participant.identity,
-    )
+    logger.info("Participant joined: %s", participant.identity)
 
     assistant_fnc = AssistantFnc()
 
-    realtime_model = openai.realtime.RealtimeModel(
-        model=os.getenv(
-            "OPENAI_REALTIME_MODEL",
-            "gpt-realtime",
-        ),
-        voice=os.getenv(
-            "OPENAI_REALTIME_VOICE",
-            "coral",
-        ),
-        modalities=["text", "audio"],
-        input_audio_transcription={
-            "model": "whisper-1",
-            "prompt": "RIA AI Voice Assistant. సంభాషణ తెలుగు మరియు ఇంగ్లీష్ (Telugu & English) లో ఉంటుంది. వంద మంది, కస్టమర్లు, బిజినెస్, sales, accounts, payment follow-ups, trial, demo, 100 minutes, Roxi.",
-        },
-        input_audio_noise_reduction="near_field",
-        turn_detection=TurnDetection(
-            type="server_vad",
-            # Voice activity sensitivity (0.6 avoids phantom background triggers)
-            threshold=0.6,
-            # Keep a small amount of audio before detected speech
-            prefix_padding_ms=350,
-            # How long the user must stop before RIA responds
-            silence_duration_ms=650,
-            # Automatically create response after user finishes
-            create_response=True,
-            # Allow user to interrupt RIA
-            interrupt_response=True,
-        ),
-    )
+    # Smallest AI STT (Pulse Multi-Language), Smallest AI TTS (Lightning Pro), Silero VAD, OpenAI LLM
+    stt_lang = os.getenv("SMALLEST_STT_LANGUAGE", "multi")
+    tts_voice = os.getenv("SMALLEST_TTS_VOICE_ID", "meher")
+    tts_model = os.getenv("SMALLEST_TTS_MODEL", "lightning_v3.1_pro")
+    llm_model = os.getenv("OPENAI_LLM_MODEL", "gpt-4o-mini")
 
     session = AgentSession(
-        llm=realtime_model,
+        stt=smallestai.STT(language=stt_lang),
+        llm=openai.LLM(
+            model=llm_model,
+            temperature=0.6,
+        ),
+        tts=smallestai.TTS(
+            voice_id=tts_voice,
+            model=tts_model,
+        ),
+        vad=silero.VAD.load(
+            min_speech_duration=0.35,      # Ignores clicks, breaths and noise < 350ms
+            min_silence_duration=0.55,     # Smooth turn closing
+            prefix_padding_duration=0.3,   # Clean voice onset
+            activation_threshold=0.75,     # High threshold blocks room noise & static
+        ),
     )
 
     agent = Agent(
@@ -88,15 +72,15 @@ async def entrypoint(ctx: JobContext):
         agent=agent,
     )
 
-    # Initial greeting
-    await session.generate_reply(
-        instructions=WELCOME_MESSAGE
+    # Immediately speak the full self-introduction without LLM skipping
+    greeting_text = (
+        "హాయ్, నేను RIA! ఈరోజు మీకు RIA Collection Agent గురించి quick demo ఇవ్వబోతున్నాను. "
+        "ఒక నిమిషం... ముందు మీ business గురించి కొంచెం తెలుసుకుందాం. "
+        "సార్, మీ business network లో approximately ఎంత మంది customers ఉన్నారు?"
     )
+    await session.say(greeting_text)
 
-    logger.info(
-        "RIA voice session started for %s",
-        participant.identity,
-    )
+    logger.info("RIA voice session started for %s", participant.identity)
 
 
 if __name__ == "__main__":
